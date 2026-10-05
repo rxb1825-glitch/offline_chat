@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Local chat</title>
+<style>
+  body { font: 18px system-ui; max-width: 640px; margin: 40px auto; padding: 0 20px; }
+  #messages { min-height: 160px; padding-left: 24px; }
+  li { margin: 8px 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+  form { display: flex; gap: 8px; }
+  input { flex: 1; min-width: 0; }
+  input, button { font: inherit; padding: 10px; }
+  #status { color: #555; }
+  details { margin: 24px 0; border: 1px solid #ddd; padding: 16px; }
+  select { max-width: 100%; padding: 8px; font: inherit; }
+  #qr { display: block; width: 240px; max-width: 100%; height: auto; margin: 12px 0; }
+  #qr[hidden] { display: none; }
+  #phone-url { overflow-wrap: anywhere; }
+</style>
+<h1>Local chat</h1>
+<p id="status" role="status">Connecting…</p>
+<details id="connection">
+  <summary>Connect your phone</summary>
+  <p>First join the laptop's hotspot or the same Wi-Fi network. Then scan this
+    chat QR with your phone's camera and tap the link.</p>
+  <p>For a laptop hotspot: Windows Settings → Network &amp; internet → Mobile hotspot.
+    Join its network on your phone. If the phone says “No internet”, stay connected.</p>
+  <label for="network">Laptop network address</label>
+  <select id="network" aria-describedby="network-help"></select>
+  <p id="network-help">Choose the adapter for your network. For a Windows hotspot,
+    look for a virtual or “Local Area Connection” adapter. Addresses vary.</p>
+  <button id="refresh-network" type="button">Refresh addresses</button>
+  <p id="qr-status" role="status"></p>
+  <img id="qr" alt="Scan to open this chat on your phone" hidden>
+  <a id="phone-url" hidden></a>
+  <p>The QR opens the chat; it does not join Wi-Fi. Codes are generated on this
+    laptop without internet. Windows may require an available connection to enable
+    its hotspot; a router without internet also works.</p>
+</details>
+<ul id="messages" aria-live="polite" aria-label="Chat messages"></ul>
+<p>
+  <label for="name">Your name</label>
+  <input id="name" form="form" placeholder="e.g. Rishav" maxlength="30" autocomplete="off" required>
+</p>
+<form id="form">
+  <input id="message" aria-label="Message" placeholder="Type a message" maxlength="500" autocomplete="off" required>
+  <button id="send" disabled>Send</button>
+</form>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+  const socket = io(); // Connect to the same host and port that served this page.
+  const form = document.getElementById('form');
+  const input = document.getElementById('message');
+  const name = document.getElementById('name');
+  const messages = document.getElementById('messages');
+  const status = document.getElementById('status');
+  const send = document.getElementById('send');
+  const network = document.getElementById('network');
+  const qr = document.getElementById('qr');
+  const phoneUrl = document.getElementById('phone-url');
+  const qrStatus = document.getElementById('qr-status');
+  const refreshNetwork = document.getElementById('refresh-network');
+  let addresses = [];
+
+  function showCode() {
+    const address = addresses[network.value];
+    qr.hidden = phoneUrl.hidden = !address;
+    if (!address) return;
+    qr.src = address.qr;
+    phoneUrl.href = phoneUrl.textContent = address.url;
+  }
+  async function loadAddresses() {
+    refreshNetwork.disabled = true;
+    qrStatus.textContent = 'Finding laptop addresses…';
+    const selectedUrl = phoneUrl.getAttribute('href');
+    try {
+      const response = await fetch('/network');
+      if (!response.ok) throw new Error('Address lookup failed');
+      addresses = await response.json();
+      network.replaceChildren();
+      addresses.forEach((address, index) => {
+        const option = document.createElement('option');
+        option.value = index;
+        option.textContent = `${address.adapter}: ${address.url}`;
+        network.appendChild(option);
+      });
+      const previous = addresses.findIndex(address => address.url === selectedUrl);
+      if (previous >= 0) network.value = previous;
+      network.disabled = !addresses.length;
+      qrStatus.textContent = addresses.length ? 'Select an address, then scan the code below.'
+        : 'No network address found. Enable a hotspot or connect to Wi-Fi, then refresh.';
+      showCode();
+    } catch (error) {
+      qr.hidden = phoneUrl.hidden = true;
+      qrStatus.textContent = 'Could not load addresses. Check the server and try Refresh addresses.';
+    } finally {
+      refreshNetwork.disabled = false;
+    }
+  }
+  network.addEventListener('change', showCode);
+  refreshNetwork.addEventListener('click', loadAddresses);
+  document.getElementById('connection').addEventListener('toggle', (event) => {
+    if (event.target.open) loadAddresses();
+  });
+
+  socket.on('connect', () => {
+    status.textContent = 'Connected';
+    send.disabled = false;
+  });
+  socket.on('disconnect', () => {
+    status.textContent = 'Disconnected — reconnecting…';
+    send.disabled = true;
+  });
+  socket.on('connect_error', () => {
+    status.textContent = 'Cannot connect — check that the server is running.';
+    send.disabled = true;
+  });
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (!socket.connected || !name.value.trim() || !input.value.trim()) return;
+    socket.emit('chat message', { name: name.value, text: input.value });
+    input.value = '';
+    input.focus();
+  });
+  socket.on('chat message', (message) => {
+    const item = document.createElement('li');
+    const you = message.senderId === socket.id ? ' (you)' : '';
+    item.textContent = `${message.name}${you}: ${message.text}`;
+    messages.appendChild(item);
+  });
+</script>
+</html>
